@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>3D Shooter Debug</title>
+<title>3D Shooter GLB</title>
 <style>
   body { margin:0; overflow:hidden; background:#000; }
   #overlay {
@@ -57,6 +57,8 @@ scene.background = new THREE.Color(0x87ceeb);
 const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
 const camera = new THREE.PerspectiveCamera(
@@ -66,13 +68,22 @@ const camera = new THREE.PerspectiveCamera(
   1000
 );
 
-/* ---------- LIGHTING ---------- */
-const ambient = new THREE.AmbientLight(0xffffff, 1.0);
+/* ---------- LIGHTS ---------- */
+const ambient = new THREE.AmbientLight(0xffffff, 0.6);
 scene.add(ambient);
 
 const sun = new THREE.DirectionalLight(0xffffff, 1.0);
-sun.position.set(50, 100, 50);
+sun.position.set(30, 100, 30);
+sun.castShadow = true;
+sun.shadow.mapSize.width = 2048;
+sun.shadow.mapSize.height = 2048;
+sun.shadow.camera.near = 0.5;
+sun.shadow.camera.far = 500;
 scene.add(sun);
+
+const fill = new THREE.DirectionalLight(0xffffff, 0.3);
+fill.position.set(-30, 50, -30);
+scene.add(fill);
 
 /* ---------- GROUND ---------- */
 const ground = new THREE.Mesh(
@@ -80,6 +91,7 @@ const ground = new THREE.Mesh(
   new THREE.MeshStandardMaterial({ color: 0x228B22 })
 );
 ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
 scene.add(ground);
 
 /* ---------- PLAYER ---------- */
@@ -88,10 +100,8 @@ player.position.set(0, 1.7, 0);
 scene.add(player);
 player.add(camera);
 
-let pitch = 0;
-let yaw = 0;
-let canMove = false;
-let gameOver = false;
+let pitch = 0, yaw = 0;
+let canMove = false, gameOver = false;
 let keys = {};
 let speed = 20;
 
@@ -100,7 +110,6 @@ let velocityY = 0;
 const GRAVITY = -40;
 const JUMP_FORCE = 15;
 let isOnGround = true;
-
 const PLAYER_HEIGHT = 1.7;
 const PLAYER_SIZE = 0.8;
 const playerBox = new THREE.Box3();
@@ -114,6 +123,7 @@ const overlay = document.getElementById("overlay");
 const crosshair = document.getElementById("crosshair");
 
 overlay.addEventListener("click", () => {
+  if(!gameReady) return;
   document.body.requestPointerLock();
 });
 
@@ -122,7 +132,7 @@ document.addEventListener("pointerlockchange", () => {
   canMove = locked;
   overlay.style.display = locked ? "none" : "block";
   crosshair.style.display = locked ? "block" : "none";
-  if (!locked && !gameOver) {
+  if(!locked && !gameOver){
     overlay.textContent = "Click to play WASD/Arrow to move, Space to jump, mouse to look :)";
   }
 });
@@ -144,9 +154,10 @@ const gun = new THREE.Mesh(
   new THREE.MeshStandardMaterial({color:0x555555})
 );
 gun.position.set(0.3,-0.25,-0.6);
+gun.castShadow = true;
 camera.add(gun);
 
-/* ---------- ZOMBIE MODEL ---------- */
+/* ---------- ZOMBIE ---------- */
 let zombieTemplate = null;
 let gameReady = false;
 const loader = new THREE.GLTFLoader();
@@ -155,130 +166,71 @@ loader.load(
   "zombie.glb",
   gltf => {
     zombieTemplate = gltf.scene;
-
-    zombieTemplate.traverse(obj => {
-      if (obj.isMesh) {
-        obj.castShadow = true;
-        obj.receiveShadow = true;
-      }
-    });
-
+    zombieTemplate.traverse(obj => { if(obj.isMesh){ obj.castShadow=true; obj.receiveShadow=true; } });
     overlay.textContent = "Click to play WASD/Arrow to move, Space to jump, mouse to look :)";
     gameReady = true;
     spawnWave();
   },
   undefined,
-  err => {
-    console.error("Failed to load zombie.glb:", err);
-    overlay.textContent = "Could not load zombie.glb. Check the filename and path.";
-  }
+  err => { overlay.textContent="Failed to load zombie.glb"; console.error(err);}
 );
 
-/* ---------- ENEMIES ---------- */
 const enemies = [];
-let score = 0;
-let wave = 1;
-const tempVec = new THREE.Vector3();
+let score = 0, wave = 1;
 
-function makeZombieInstance() {
+/* ---------- ENEMY SPAWN ---------- */
+function makeZombieInstance(){
   const model = zombieTemplate.clone(true);
-
   const box = new THREE.Box3().setFromObject(model);
-  const size = new THREE.Vector3();
-  box.getSize(size);
-
-  const groundOffset = -box.min.y;
-  model.position.y += groundOffset;
-
+  const size = new THREE.Vector3(); box.getSize(size);
+  model.position.y += -box.min.y;
   const radius = Math.max(size.x, size.z) * 0.45;
-
   return { model, radius };
 }
 
 function spawnEnemy(){
-  if (!zombieTemplate) return;
-
+  if(!zombieTemplate) return;
   const { model, radius } = makeZombieInstance();
-
-  const angle = Math.random() * Math.PI * 2;
-  const distance = 10 + Math.random() * 10;
-
-  model.position.x = player.position.x + Math.cos(angle) * distance;
-  model.position.z = player.position.z + Math.sin(angle) * distance;
-
+  const angle = Math.random()*Math.PI*2;
+  const distance = 10 + Math.random()*10;
+  model.position.x = player.position.x + Math.cos(angle)*distance;
+  model.position.z = player.position.z + Math.sin(angle)*distance;
   scene.add(model);
-
-  enemies.push({
-    mesh: model,
-    box: new THREE.Box3().setFromObject(model),
-    health: 5,
-    speed: 8 + wave * 0.5,
-    radius: radius
-  });
+  enemies.push({ mesh:model, box:new THREE.Box3().setFromObject(model), health:5, speed:8+wave*0.5, radius:radius });
 }
 
 function spawnWave(){
-  if (!zombieTemplate) return;
-  for(let i = 0; i < wave * 3; i++){
-    spawnEnemy();
-  }
+  if(!zombieTemplate) return;
+  for(let i=0;i<wave*3;i++) spawnEnemy();
 }
 
 /* ---------- BULLETS ---------- */
 const bullets = [];
-
 class Bullet {
-  constructor(pos,dir){
-    this.mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.1,8,8),
-      new THREE.MeshBasicMaterial({color:0xffff00})
-    );
-    this.mesh.position.copy(pos);
-    scene.add(this.mesh);
+  constructor(pos, dir){
+    this.mesh = new THREE.Mesh(new THREE.SphereGeometry(0.1,8,8), new THREE.MeshBasicMaterial({color:0xffff00}));
+    this.mesh.position.copy(pos); scene.add(this.mesh);
     this.dir = dir.clone().normalize();
-    this.speed = 50;
-    this.alive = true;
+    this.speed = 50; this.alive=true;
   }
-
   update(delta){
     if(!this.alive) return;
-
     this.mesh.position.addScaledVector(this.dir,this.speed*delta);
-
     for(let i=enemies.length-1;i>=0;i--){
-      const e = enemies[i];
-      e.box.setFromObject(e.mesh).expandByScalar(0.15);
-
+      const e=enemies[i]; e.box.setFromObject(e.mesh).expandByScalar(0.15);
       if(e.box.containsPoint(this.mesh.position)){
-        e.health--;
-        if(e.health<=0){
-          try {
-            deathSound.currentTime = 0;
-            deathSound.play();
-          } catch {}
-          scene.remove(e.mesh);
-          enemies.splice(i,1);
-          score += 100;
-        }
-        scene.remove(this.mesh);
-        this.alive = false;
-        return;
+        e.health--; if(e.health<=0){ deathSound.currentTime=0; deathSound.play(); scene.remove(e.mesh); enemies.splice(i,1); score+=100; }
+        scene.remove(this.mesh); this.alive=false; return;
       }
     }
-
-    if(this.mesh.position.distanceTo(player.position) > 150){
-      scene.remove(this.mesh);
-      this.alive = false;
-    }
+    if(this.mesh.position.distanceTo(player.position)>150){ scene.remove(this.mesh); this.alive=false; }
   }
 }
 
-window.addEventListener("mousedown",()=>{
+window.addEventListener("mousedown", ()=>{
   if(!canMove || !gameReady || gameOver) return;
-  const pos = new THREE.Vector3();
-  gun.getWorldPosition(pos);
-  const dir = new THREE.Vector3();
-  camera.getWorldDirection(dir);
+  const pos=new THREE.Vector3(); gun.getWorldPosition(pos);
+  const dir=new THREE.Vector3(); camera.getWorldDirection(dir);
   bullets.push(new Bullet(pos,dir));
 });
 
@@ -286,109 +238,61 @@ window.addEventListener("mousedown",()=>{
 function update(delta){
   if(!canMove || gameOver) return;
 
-  const forward = new THREE.Vector3(0,0,-1).applyQuaternion(player.quaternion).normalize();
-  const right = new THREE.Vector3().crossVectors(forward,new THREE.Vector3(0,1,0)).normalize();
-
-  const move = new THREE.Vector3();
+  // player movement
+  const forward=new THREE.Vector3(0,0,-1).applyQuaternion(player.quaternion);
+  const right=new THREE.Vector3().crossVectors(forward,new THREE.Vector3(0,1,0));
+  const move=new THREE.Vector3();
   if(keys["w"]||keys["ArrowUp"]) move.add(forward);
   if(keys["s"]||keys["ArrowDown"]) move.add(forward.clone().negate());
   if(keys["a"]||keys["ArrowLeft"]) move.add(right.clone().negate());
   if(keys["d"]||keys["ArrowRight"]) move.add(right);
+  if(move.lengthSq()>0){ move.normalize().multiplyScalar(speed*delta); player.position.add(move); }
 
-  if(move.lengthSq()>0){
-    move.normalize().multiplyScalar(speed*delta);
-    player.position.add(move);
-  }
-
-  if(isOnGround && keys[" "]){
-    velocityY = JUMP_FORCE;
-    isOnGround = false;
-  }
-
-  velocityY += GRAVITY * delta;
-  player.position.y += velocityY * delta;
-
-  if(player.position.y <= PLAYER_HEIGHT){
-    player.position.y = PLAYER_HEIGHT;
-    velocityY = 0;
-    isOnGround = true;
-  }
+  if(isOnGround && keys[" "]){ velocityY=JUMP_FORCE; isOnGround=false; }
+  velocityY += GRAVITY*delta; player.position.y += velocityY*delta;
+  if(player.position.y<=PLAYER_HEIGHT){ player.position.y=PLAYER_HEIGHT; velocityY=0; isOnGround=true; }
 
   playerBox.set(
-    new THREE.Vector3(
-      player.position.x - PLAYER_SIZE,
-      player.position.y,
-      player.position.z - PLAYER_SIZE
-    ),
-    new THREE.Vector3(
-      player.position.x + PLAYER_SIZE,
-      player.position.y + PLAYER_HEIGHT,
-      player.position.z + PLAYER_SIZE
-    )
+    new THREE.Vector3(player.position.x-PLAYER_SIZE, player.position.y, player.position.z-PLAYER_SIZE),
+    new THREE.Vector3(player.position.x+PLAYER_SIZE, player.position.y+PLAYER_HEIGHT, player.position.z+PLAYER_SIZE)
   );
 
+  // enemy movement and facing
   for(const e of enemies){
-    const dir = player.position.clone().sub(e.mesh.position);
-    dir.y = 0;
-    const dist = dir.length();
-
-    if(dist > 0.001){
-      dir.normalize();
-      e.mesh.position.addScaledVector(dir, e.speed * delta);
-    }
+    const dir=player.position.clone().sub(e.mesh.position); dir.y=0;
+    if(dir.length()>0.001){ dir.normalize(); e.mesh.position.addScaledVector(dir,e.speed*delta); }
   }
 
-  for(let i = 0; i < enemies.length; i++){
-    for(let j = i + 1; j < enemies.length; j++){
-      const a = enemies[i];
-      const b = enemies[j];
-
-      const deltaPos = a.mesh.position.clone().sub(b.mesh.position);
-      deltaPos.y = 0;
-      const dist = deltaPos.length();
-      const minDist = a.radius + b.radius;
-
-      if(dist > 0 && dist < minDist){
-        const push = (minDist - dist) * 0.5;
-        deltaPos.normalize();
-        a.mesh.position.addScaledVector(deltaPos, push);
-        b.mesh.position.addScaledVector(deltaPos, -push);
-      }
+  // simple separation
+  for(let i=0;i<enemies.length;i++){
+    for(let j=i+1;j<enemies.length;j++){
+      const a=enemies[i], b=enemies[j];
+      const delta=a.mesh.position.clone().sub(b.mesh.position); delta.y=0;
+      const dist=delta.length(); const minDist=a.radius+b.radius;
+      if(dist>0 && dist<minDist){ const push=(minDist-dist)*0.5; delta.normalize(); a.mesh.position.addScaledVector(delta,push); b.mesh.position.addScaledVector(delta,-push); }
     }
   }
 
   for(const e of enemies){
     e.mesh.lookAt(player.position.x, e.mesh.position.y, player.position.z);
-    e.mesh.rotateY(Math.PI);  // flip this if your model faces the wrong way
+    e.mesh.rotateY(Math.PI); // flip if needed
     e.box.setFromObject(e.mesh).expandByScalar(0.1);
-
     if(playerBox.intersectsBox(e.box)){
-      gameOver = true;
-      alert("Game Over :(  Score: " + score);
-      location.reload();
+      gameOver=true; alert("Game Over :( Score: "+score); location.reload();
     }
   }
 
-  if(gameReady && enemies.length === 0 && !gameOver){
-    wave++;
-    spawnWave();
-  }
+  if(gameReady && enemies.length===0 && !gameOver){ wave++; spawnWave(); }
 }
 
 /* ---------- ANIMATE ---------- */
-const clock = new THREE.Clock();
-
+const clock=new THREE.Clock();
 function animate(){
   requestAnimationFrame(animate);
-  const delta = clock.getDelta();
-
-  for(let i = bullets.length - 1; i >= 0; i--){
-    bullets[i].update(delta);
-    if(!bullets[i].alive) bullets.splice(i,1);
-  }
-
+  const delta=clock.getDelta();
+  for(let i=bullets.length-1;i>=0;i--){ bullets[i].update(delta); if(!bullets[i].alive) bullets.splice(i,1); }
   update(delta);
-  document.getElementById("scoreUI").innerText = "Score: " + score + " | Wave: " + wave;
+  document.getElementById("scoreUI").innerText="Score: "+score+" | Wave: "+wave;
   renderer.render(scene,camera);
 }
 animate();
@@ -396,7 +300,7 @@ animate();
 /* ---------- RESIZE ---------- */
 window.addEventListener("resize",()=>{
   renderer.setSize(window.innerWidth,window.innerHeight);
-  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.aspect=window.innerWidth/window.innerHeight;
   camera.updateProjectionMatrix();
 });
 </script>
